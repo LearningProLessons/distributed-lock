@@ -1,77 +1,57 @@
+using System.Net;
+using RedLockNet;
 using RedLockNet.SERedis;
 using RedLockNet.SERedis.Configuration;
-using RedLockNet;
-using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-builder.Services.AddOpenApi();
-
-// Redis Lock Factory Registration
+// REDIS LOCK
 builder.Services.AddSingleton<IDistributedLockFactory>(_ =>
 {
     var redisEndpoints = new[]
     {
-        new RedLockEndPoint { EndPoint = new DnsEndPoint("redis1", 6379) },
-        new RedLockEndPoint { EndPoint = new DnsEndPoint("redis2", 6379) },
-        new RedLockEndPoint { EndPoint = new DnsEndPoint("redis3", 6379) },
+        new RedLockEndPoint { EndPoint = new DnsEndPoint("redis", 6379) }
     };
-
     return RedLockFactory.Create(redisEndpoints);
 });
 
+builder.Services.AddSingleton<LeaderState>();
+
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+var leaderState = app.Services.GetRequiredService<LeaderState>();
+var lockFactory = app.Services.GetRequiredService<IDistributedLockFactory>();
+
+// Try to acquire leader lock every few seconds
+_ = Task.Run(async () =>
 {
-    app.MapOpenApi();
-}
-
-app.UseHttpsRedirection();
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-// 🧪 Lock-protected endpoint
-app.MapGet("/lock", async (IDistributedLockFactory lockFactory) =>
-{
-    await using var redLock = await lockFactory.CreateLockAsync(
-        "my-dist-lock",       // lock resource
-        TimeSpan.FromSeconds(10) // expiry time
-    );
-
-    if (redLock.IsAcquired)
+    while (true)
     {
-        Console.WriteLine("✅ Lock acquired by this node.");
-        await Task.Delay(5000); // simulate some work
-        return Results.Ok("Lock acquired and job done.");
+        var lockHandle = await lockFactory.CreateLockAsync("leader-lock", TimeSpan.FromSeconds(10));
+        if (lockHandle.IsAcquired)
+        {
+            leaderState.IsLeader = true;
+            Console.WriteLine("🔵 I am the leader!");
+            await Task.Delay(5000);
+        }
+        else
+        {
+            leaderState.IsLeader = false;
+            Console.WriteLine("🟡 Standby...");
+            await Task.Delay(3000);
+        }
     }
-
-    Console.WriteLine("❌ Failed to acquire lock.");
-    return Results.StatusCode(423); // 423 Locked
 });
 
-app.MapGet("/weatherforecast", () =>
+// Endpoints
+app.MapGet("/lock", (LeaderState leader) =>
 {
-    var forecast = Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+    return leader.IsLeader ? Results.Ok("I'm the leader and I serve this.") : Results.StatusCode(503);
+});
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
+class LeaderState
 {
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+    public volatile bool IsLeader;
 }
