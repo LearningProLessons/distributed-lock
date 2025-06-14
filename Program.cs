@@ -1,9 +1,26 @@
 using System.Net;
+using distributed_cache.Data;
+using distributed_cache.Interfaces;
+using distributed_cache.Repositories;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RedLockNet;
 using RedLockNet.SERedis;
 using RedLockNet.SERedis.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Register custom services for the superheroes
+builder.Services.AddScoped<ISuperheroRepository, SuperheroRepository>();
+builder.Services.AddScoped<ISuperpowerRepository, SuperpowerRepository>();
+builder.Services.AddScoped<IMovieRepository, MovieRepository>();
+builder.Services.AddGraphQLServer().AddQueryType<Query>().AddProjections().AddFiltering().AddSorting();
+
+// Add Application Db Context options
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
+ 
+
 
 // Register Redis distributed lock factory (RedLock)
 builder.Services.AddSingleton<IDistributedLockFactory>(_ =>
@@ -19,6 +36,11 @@ builder.Services.AddSingleton<IDistributedLockFactory>(_ =>
 builder.Services.AddSingleton<LeaderState>();
 
 var app = builder.Build();
+
+using var scope = app.Services.CreateScope();
+var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+db.Database.Migrate();
+
 
 var leaderState = app.Services.GetRequiredService<LeaderState>();
 var lockFactory = app.Services.GetRequiredService<IDistributedLockFactory>();
@@ -60,6 +82,11 @@ app.MapGet("/process", (LeaderState leader) =>
     Console.WriteLine($"✔️ Leader handled the request: {id}");
     return Results.Ok($"Handled by leader: {id}");
 });
+
+// app.UseHttpsRedirection();
+
+
+app.MapGraphQL(path: "/graphql");
 
 app.Run();
 

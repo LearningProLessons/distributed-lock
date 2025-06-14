@@ -5,6 +5,19 @@ networks:
     driver: bridge
 
 services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver
+    environment:
+      SA_PASSWORD: "Hello&Run1234"
+      ACCEPT_EULA: "Y"
+    ports:
+      - "1434:1433"
+    networks:
+      - internal_net
+    restart: unless-stopped
+
+
   redis:
     image: redis:7
     container_name: redis
